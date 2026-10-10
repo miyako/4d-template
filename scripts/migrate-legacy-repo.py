@@ -1304,7 +1304,8 @@ def ensure_checkout_submodules(text: str) -> Tuple[str, str]:
 
 # Facts the survey cannot show (it only lists agent files), reported in the inventory.
 SURVEY_NOTES = {
-    "4D-Demo-AI-Automation": "`.github/.instructions/` (vendored 4d-depot content, MIT) left untouched",
+    "4D-Demo-AI-Automation": "`.github/.instructions/` (vendored 4d-depot content, MIT) left untouched; "
+                             "HELD: custom AGENTS.md names skills `4d-docs`/`4d-form-layout` (now `4dform`), awaiting decision",
     "TechNote_26-01-AIKitInModernApp": "copilot-instructions is AIManager-specific: moved to AGENTS.md verbatim",
 }
 
@@ -1369,8 +1370,14 @@ def inventory(survey: Path, mapping: Optional[Mapping], results: Dict[str, dict]
                         notes.append(f"keep own `{n}`")
                     elif e is None:
                         notes.append(f"`{n}` not in MIGRATION.json (kept)")
+                    elif e.templates and (templates.get(kind) or e.new_name(n) != n) and not any(
+                            t.lower() == re.sub(r"\.git$", "", templates.get(kind, "").rstrip("/")).rsplit("/", 1)[-1].lower()
+                            for t in e.templates):
+                        notes.append(f"remove `{n}` (only {', '.join(e.templates)} keeps it)")
                     elif mentions_usage_rules(blob_text(sha)):
                         notes.append(f"`{n}` has token rules → template version")
+                    elif e.new_name(n) != n:
+                        notes.append(f"`{n}` → template `{e.new_name(n)}`")
                     else:
                         notes.append(f"keep/sync `{n}`")
             if skills:
