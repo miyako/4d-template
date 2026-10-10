@@ -35,7 +35,9 @@ MIGRATION = {
     "instructions": {
         "css.instructions.md": {"status": "skill", "skill": "4dcss", "url": SKILLS_TREE + "4dcss"},
         "tahoe.css.instructions.md": {"status": "skill", "skill": "4dcss", "url": SKILLS_TREE + "4dcss"},
-        "startup.instructions.md": {"status": "skill", "skill": "4dstartup", "url": SKILLS_TREE + "4dstartup"},
+        "startup.instructions.md": {"status": "instruction", "skill": "4dstartup", "url": None,
+                                    "path": ".github/instructions/hdi.startup.instructions.md",
+                                    "templates": ["HDI_Template"]},
         "aikit.async.instructions.md": {"status": "skill", "skill": "4daikit", "url": SKILLS_TREE + "4daikit"},
         "deprecated.commands.instructions.md": {"status": "skill", "skill": "4dlang", "url": SKILLS_TREE + "4dlang"},
         "readme.usage.guidance.instructions.md": {"status": "deleted"},
@@ -73,6 +75,7 @@ jobs:
       - name: Python environment
         run: make setup
 """
+TOKEN_BRANCHES = "---\napplyTo: README.md\n---\nbranches\n\n## Copilot Token Usage\n\nAdd a table.\n"
 README_HDI = (
     "# HDI_Foo\r\n\r\nDemo.\r\n\r\n## Modernisation notes\r\n\r\n"
     "| Branch | Description | Instructions |\r\n|---|---|---|\r\n"
@@ -80,7 +83,7 @@ README_HDI = (
     "[tahoe](./.github/instructions/tahoe.css.instructions.md#top) |\r\n"
     "| [`b2`](../../tree/b2) | Docs | [readme.usage.guidance.instructions.md](.github/instructions/readme.usage.guidance.instructions.md) |\r\n"
     "| [`b3`](../../tree/b3) | Branch table | [readme.branches.instructions.md](.github/instructions/readme.branches.instructions.md) |\r\n"
-    "| [`b4`](../../tree/b4) | Old path | [startup](.github/copilot/instructions/startup.instructions.md) |\r\n"
+    "| [`b4`](../../tree/b4) | Old path | [`startup.instructions.md`](.github/copilot/instructions/startup.instructions.md) |\r\n"
     "\r\nSee the [instructions folder](.github/instructions/).\r\n\r\n"
     "```markdown\r\n## Copilot Token Usage\r\n[x](.github/instructions/css.instructions.md)\r\n```\r\n\r\n"
     "## Copilot Token Usage\r\n\r\n| Session | Tokens |\r\n|---|--:|\r\n| a | 1 |\r\n\r\n"
@@ -91,11 +94,10 @@ README_HDI = (
 README_HDI_EXPECTED = (
     "# HDI_Foo\r\n\r\nDemo.\r\n\r\n## Modernisation notes\r\n\r\n"
     "| Branch | Description | Instructions |\r\n|---|---|---|\r\n"
-    f"| [`b1`](../../tree/b1) | Dark mode | [css.instructions.md]({SKILLS_TREE}4dcss), "
-    f"[tahoe]({SKILLS_TREE}4dcss) |\r\n"
+    f"| [`b1`](../../tree/b1) | Dark mode | [4dcss skill]({SKILLS_TREE}4dcss) |\r\n"
     "| [`b2`](../../tree/b2) | Docs | readme.usage.guidance.instructions.md |\r\n"
     "| [`b3`](../../tree/b3) | Branch table | [readme.branches.instructions.md](.github/instructions/readme.branches.instructions.md) |\r\n"
-    f"| [`b4`](../../tree/b4) | Old path | [startup]({SKILLS_TREE}4dstartup) |\r\n"
+    "| [`b4`](../../tree/b4) | Old path | [`hdi.startup.instructions.md`](.github/instructions/hdi.startup.instructions.md) |\r\n"
     "\r\nSee the [instructions folder](.github/instructions/).\r\n\r\n"
     "```markdown\r\n## Copilot Token Usage\r\n[x](.github/instructions/css.instructions.md)\r\n```\r\n\r\n"
     "## License\r\n\r\nMIT \u00e9\u00e8 \u65e5\u672c\u8a9e\r\n"
@@ -206,6 +208,7 @@ class MigrateE2E(unittest.TestCase):
             ".github/copilot-instructions.md": tn_cop,
             ".github/instructions/technote-translation.instructions.md": "---\napplyTo: src/**\n---\nmy learnings\n",
             ".github/instructions/aikit.async.instructions.md": AIKIT,
+            ".github/instructions/startup.instructions.md": "startup\n",
             ".github/skills/apply-glossary/SKILL.md": "glossary\n",
             ".github/skills/review-figures/SKILL.md": "figures\n",
             ".github/workflows/copilot-setup-steps.yml": OLD_SETUP,
@@ -226,6 +229,14 @@ class MigrateE2E(unittest.TestCase):
         make_repo(r, "SkillCopy_Fork", [{
             ".github/copilot-instructions.md": AIKIT.replace("Step 3:", "Step three:") + "Local tweak.\n",
             "ReadMe.md": "# Fork\n",
+        }])
+        make_repo(r, "Webinar_Gen", [{
+            ".github/instructions/startup.instructions.md": "startup\n",
+            ".github/instructions/readme.branches.instructions.md": TOKEN_BRANCHES,
+            ".github/instructions/css.instructions.md": CSS_A,
+            ".github/instructions/notes.instructions.md": "---\napplyTo: x\n---\nAdd a Model Selection table.\n",
+            "README.md": "# Gen\n\nSee [startup](.github/instructions/startup.instructions.md) and "
+                         "[css](.github/instructions/css.instructions.md).\n",
         }])
         make_repo(r, "4d-plugin-sodium", [{".github/instructions/plugin-dev.instructions.md": "x\n"}])
 
@@ -278,7 +289,7 @@ class MigrateE2E(unittest.TestCase):
         self.assertEqual((wc / "README.md").read_bytes(), README_HDI_EXPECTED.encode("utf-8"))
         gi = (wc / ".gitignore").read_bytes()
         self.assertTrue(gi.startswith(b"Data/\r\n/tools/4dlsp/\r\n\r\n# Tools"), gi)
-        for d in ("/tools/4dcatalog/", "/tools/4dform/", "/tools/4dlang/"):
+        for d in ("/tools/4dcatalog/", "/tools/4dform/", "/tools/4dlang/", "/tools/4dcli/"):
             self.assertIn(d.encode() + b"\r\n", gi)
         self.assertEqual(gi.count(b"4dlsp"), 1)
         setup = (wc / ".github/workflows/copilot-setup-steps.yml").read_text()
@@ -333,7 +344,25 @@ class MigrateE2E(unittest.TestCase):
         self.assertNotIn("(keep as is)", agents)
         self.assertFalse((wc / ".github/skills").exists())
         self.assertTrue((wc / ".github/.instructions/4d.instructions.md").exists())
+        self.assertIn(".github/.instructions/: vendored third-party content", "\n".join(rep["warnings"]))
         self.assertIn("4d-form-layout: not in MIGRATION.json", "\n".join(rep["warnings"]))
+
+    def test_3b_generic_token_rules(self):
+        reps, out = self.run_cli("Webinar_Gen", extra=["--push"])
+        rep = reps["Webinar_Gen"]
+        self.assertEqual(rep["kind"], "generic")
+        wc = self.checkout("Webinar_Gen")
+        idir = wc / ".github/instructions"
+        self.assertEqual(sorted(p.name for p in idir.iterdir()),
+                         ["notes.instructions.md", "readme.branches.instructions.md"])   # startup: HDI only
+        self.assertEqual((idir / "readme.branches.instructions.md").read_text(),
+                         "---\napplyTo: README.md\n---\nnew branches\n")              # token-free HDI version
+        self.assertIn("replaced by the HDI_Template version", "\n".join(rep["modified"]))
+        self.assertIn("notes.instructions.md: still contains Copilot token/model usage rules",
+                      "\n".join(rep["warnings"]))
+        self.assertEqual((wc / "README.md").read_text(),
+                         f"# Gen\n\nSee [4dstartup skill]({SKILLS_TREE}4dstartup) and "
+                         f"[4dcss skill]({SKILLS_TREE}4dcss).\n")
 
     def test_4_skill_copy(self):
         reps, out = self.run_cli("SkillCopy_Fork", extra=["--push"])
@@ -365,10 +394,10 @@ class MigrateE2E(unittest.TestCase):
         self.assertEqual(self.head("HDI_Dry"), before)
 
     def test_7_idempotent(self):
-        for name in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork"):
+        for name in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork", "Webinar_Gen"):
             if self.head(name) == sh("git", "--git-dir", str(self.tmp / "work" / name / ".git"), "rev-parse", "HEAD"):
                 self.run_cli(name, extra=["--push"])  # make the test independent of ordering
-        heads = {n: self.head(n) for n in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork")}
+        heads = {n: self.head(n) for n in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork", "Webinar_Gen")}
         reps, out = self.run_cli(*heads, extra=["--push"])
         for name, h in heads.items():
             self.assertTrue(reps[name]["status"].startswith("no-op"), (name, reps[name]))
@@ -385,6 +414,57 @@ class UnitTests(unittest.TestCase):
                                    "readme.hdi.instructions.md": "deleted"})
         self.assertEqual(m.instructions["menu.instructions.md"].skill, "4dmenus")
         self.assertEqual(m.instructions["readme.hdi.instructions.md"].status, "deleted")
+
+    def test_real_mapping(self):
+        real = BASE / ".agents/MIGRATION.json"   # the published file (dist branch of miyako/skills)
+        if not real.exists():
+            self.skipTest("run `git submodule update --init .agents` first")
+        m = migrate.load_mapping(str(real))
+        st = m.instructions["startup.instructions.md"]
+        self.assertEqual((st.status, st.skill, st.url), ("instruction", "4dstartup", None))
+        self.assertEqual(st.new_name("startup.instructions.md"), "hdi.startup.instructions.md")
+        self.assertEqual(m.instructions["css.instructions.md"].skill, "4dcss")
+        self.assertEqual(m.instructions["readme.usage.guidance.instructions.md"].status, "deleted")
+        self.assertEqual(m.skills["apply-glossary"].skill, "technote-apply-glossary")
+        for e in m.instructions.values():
+            self.assertIn(e.status, ("skill", "instruction", "deleted"), e)
+            if e.status == "skill":
+                self.assertTrue((BASE / ".agents/skills" / e.skill / "SKILL.md").exists(), e)
+        for e in m.skills.values():
+            self.assertTrue((BASE / ".agents/skills" / e.skill / "SKILL.md").exists(), e)
+
+    def test_inventory(self):
+        d = Path(tempfile.mkdtemp(prefix="inv-"))
+        try:
+            (d / "blobs").mkdir()
+            (d / "blobs/aaa").write_text("## Copilot Token Usage\n")
+            (d / "scan.tsv").write_text("HDI_A\tfalse\nDemo_X\ttrue\nTN_C\tfalse\n4d-plugin-x\tfalse\n"
+                                        "HDI_Template\tfalse\nEmpty\tfalse\n")
+            (d / "files.tsv").write_text(
+                "HDI_A\t.github/instructions/css.instructions.md\tc1\n"
+                "HDI_A\t.github/instructions/readme.branches.instructions.md\taaa\n"
+                "Demo_X\t.github/copilot-instructions.md\tzzz\n"
+                "TN_C\t.github/instructions/technote-translation.instructions.md\tt1\n"
+                "TN_C\t.github/skills/apply-glossary/SKILL.md\tg1\n"
+                "4d-plugin-x\t.github/instructions/plugin-dev.instructions.md\tp1\n")
+            md = migrate.inventory(d, migrate.parse_mapping(MIGRATION),
+                                   {"HDI_A": {"status": "pushed", "commit": "abc1234", "warnings": ["w"]}},
+                                   migrate.TEMPLATES)
+            rows = {l.split("|")[1].strip().split("]")[0][1:]: [c.strip() for c in l.split("|")[2:-1]]
+                    for l in md.splitlines() if l.startswith("| [")}
+            self.assertEqual(rows["HDI_A"][:3], ["", "hdi", "migrate (hdi)"])
+            self.assertIn("remove 1 instruction copies", rows["HDI_A"][3])
+            self.assertIn("has token rules", rows["HDI_A"][3])
+            self.assertEqual(rows["HDI_A"][4], "pushed (1 warnings)")
+            self.assertIn("abc1234", rows["HDI_A"][5])
+            self.assertEqual(rows["Demo_X"][:3], ["yes", "generic", "migrate (generic)"])
+            self.assertEqual(rows["TN_C"][1], "technote")
+            self.assertIn("keep own", rows["TN_C"][3])
+            self.assertEqual(rows["4d-plugin-x"][2], "deferred (do not touch)")
+            self.assertTrue(rows["HDI_Template"][2].startswith("core"))
+            self.assertEqual(rows["Empty"][2], "nothing to migrate")
+        finally:
+            shutil.rmtree(d)
 
     def test_strip_sections_keeps_bytes(self):
         text = "# T\n\n## A\n\nx\n\n## Copilot Token Usage\n\n|a|\n\n### sub\n\ny\n\n## B\n\nz"

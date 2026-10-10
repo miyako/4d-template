@@ -16,13 +16,14 @@ AGENTS.md                                     # repository instructions (placeho
 CLAUDE.md                                     # "@AGENTS.md" for Claude Code
 .agents/                                      # submodule → miyako/skills, branch dist (the skills)
 .gitmodules
-.gitignore                                    # 4D entries + provisioned tool folders
+.gitignore                                    # the 4dproject skill's canonical .gitignore
 .github/instructions/README.md                # when to add a path-scoped instruction file
 .github/instructions/example.instructions.md  # format example — delete or replace
 .github/workflows/copilot-setup-steps.yml     # Copilot cloud agent: checkout with submodules
 .github/workflows/update-skills.yml           # weekly: move .agents to the latest skills, commit if changed
 TEMPLATE_CHECKLIST.md                         # checklist for authors of a derived template
 scripts/migrate-legacy-repo.py                # converts repositories that use the old layout (see below)
+scripts/tests/test_migrate.py                 # its tests (fixture repositories in a temporary folder)
 ```
 
 - **`AGENTS.md`** is the single entry point for agents (Copilot CLI, VS Code, the cloud agent, Codex; Claude Code
@@ -93,4 +94,15 @@ Older repositories carry copies of instructions in `.github/instructions/*.instr
 `.github/skills/` and a `.github/copilot-instructions.md`. `scripts/migrate-legacy-repo.py` converts them to the
 layout above, using the mapping `4d-skills/MIGRATION.json` in miyako/skills. Run
 `python3 scripts/migrate-legacy-repo.py --help` for usage, and `python3 scripts/tests/test_migrate.py` for its
-tests.
+tests. Migrate `HDI_Template` and `4d-technote-localisation-template` first: derived repositories are synced
+with them.
+
+```sh
+# preview (clones, changes and commits in a work folder; never pushes)
+python3 scripts/migrate-legacy-repo.py HDI_Foo --dry-run --survey <survey-dir>
+# migrate and push
+python3 scripts/migrate-legacy-repo.py HDI_Foo TechNote_Bar --push --report-json report.json
+# inventory of every surveyed repository (kind, planned action, results of earlier runs)
+python3 scripts/migrate-legacy-repo.py --list --survey <survey-dir> --results report.json \
+    --list-output docs/MIGRATION_STATUS.md
+```

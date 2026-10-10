@@ -38,7 +38,7 @@ Use this list when you create a template from `miyako/4d-template` (or update an
 
 ## .gitignore
 
-- [ ] Ignores `/tools/4dcatalog/`, `/tools/4dform/`, `/tools/4dlsp/`, `/tools/4dlang/` — **not** the whole `tools/`.
+- [ ] Ignores `/tools/4dcatalog/`, `/tools/4dform/`, `/tools/4dlsp/`, `/tools/4dlang/`, `/tools/4dcli/` — **not** the whole `tools/`.
 - [ ] 4D entries adjusted to the template's layout (e.g. `demo/*/Data/` when projects live in sub-folders);
       decide explicitly whether `Settings/` is tracked.
 

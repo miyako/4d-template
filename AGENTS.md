@@ -53,7 +53,7 @@ git submodule update --init .agents
 ```
 
 If `.agents/` is empty, run the command above before doing anything else. `--recursive` is not needed.
-Tools provisioned by the skills go to `tools/4dcatalog/`, `tools/4dform/`, `tools/4dlsp/` and `tools/4dlang/`;
+Tools provisioned by the skills go to `tools/4dcatalog/`, `tools/4dform/`, `tools/4dlsp/`, `tools/4dlang/` and `tools/4dcli/`;
 they are ignored by `.gitignore` and must not be committed.
 
 ## Instructions vs skills (keep as is)

@@ -1,28 +1,24 @@
-# macOS / Windows
+# 4D data, logs and derived files
+[dD][aA][tT][aA]/
+Logs/
+DerivedData/
+Libraries/
+userPreferences.*/
+
+# Uncomment to ignore the trash
+# Project/Trash
+
+# Settings/ is a per-repository decision (see the 4dproject skill); uncomment to ignore it
+# Settings/
+
+# System files
 .DS_Store
 ehthumbs.db
 Thumbs.db
 
-# 4D data, logs and user preferences
-[dD][aA][tT][aA]/
-Logs/
-userPreferences.*/
-
-# 4D derived data and caches
-DerivedData/
-
-# 4D components installed by the dependency manager
-Libraries/
-
-# Uncomment to ignore the 4D trash
-# Project/Trash
-
-# Uncomment if user/machine settings must not be shared (decide per repository)
-# Settings/
-
-# Tools provisioned by the skills in .agents (4dtools). Do NOT ignore the whole tools/ folder:
-# some repositories commit their own scripts there.
+# Tools provisioned by the 4D skills (see the 4dtools skill)
 /tools/4dcatalog/
 /tools/4dform/
 /tools/4dlsp/
 /tools/4dlang/
+/tools/4dcli/

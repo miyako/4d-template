@@ -60,7 +60,8 @@ KNOWN_MOVED_SKILLS = {
     "apply-glossary", "review-figures", "localise-demo-data", "localise-4d-project", "release-technote",
     "4d-docs", "4d-form-layout",
 }
-TOOL_DIRS = ["/tools/4dcatalog/", "/tools/4dform/", "/tools/4dlsp/", "/tools/4dlang/"]
+SKILLS_TREE_URL = "https://github.com/miyako/skills/tree/main/4d-skills/skills/"
+TOOL_DIRS = ["/tools/4dcatalog/", "/tools/4dform/", "/tools/4dlsp/", "/tools/4dlang/", "/tools/4dcli/"]
 # Repositories this tool must not touch (DESIGN.md "Do NOT touch" + core repos). Override with --force.
 DENYLIST = {
     "4d-plugin-tutorial", "4d-plugin-4d-for-oci", "4d-plugin-factur-x-qpdf", "4d-plugin-factur-x-podofo",
@@ -68,6 +69,14 @@ DENYLIST = {
     "4d-static-docs", "4d-skills-test-claude", "4d-skills-test-gemini", "4d-catalog-diagram",
     "skills", "4d-template", "hdi_template", "4d-technote-localisation-template",
 }
+DENY_PREFIXES = ("4d-plugin-", "4d-skills-test-")
+
+
+def is_denied(repo: str) -> bool:
+    r = repo.lower()
+    return r in DENYLIST or r.startswith(DENY_PREFIXES)
+
+
 # README headings whose whole section is removed (Copilot model / mode / token / session content).
 STRIP_HEADING_PATTERNS = [
     r"\bcopilot\b.*\b(token|tokens|usage|model|models|mode|modes|session|sessions)\b",
@@ -77,6 +86,10 @@ STRIP_HEADING_PATTERNS = [
     r"\busage\s+guidance\b",
     r"copilot.*(トークン|モデル|モード|セッション)",
 ]
+# Kept instruction files must not carry these rules any more (user decision: no Copilot usage in READMEs).
+USAGE_RULE_PATTERNS = [r"copilot\s+token\s+usage", r"\btoken\s+usage\b", r"model\s+selection", r"mode\s+selection",
+                       r"usage\s+guidance"]
+CORE_REPOS = {"skills", "4d-template", "hdi_template", "4d-technote-localisation-template"}
 SIMILARITY_THRESHOLD = 0.6
 
 STATUS_SKILL, STATUS_DELETED, STATUS_INSTRUCTION, STATUS_UNKNOWN = "skill", "deleted", "instruction", "unknown"
@@ -169,6 +182,12 @@ class Entry:
     url: Optional[str] = None
     skill: Optional[str] = None
     templates: Optional[List[str]] = None
+    path: Optional[str] = None   # status instruction: repository-relative path in the templates (may be a rename)
+
+    def new_name(self, old: str) -> str:
+        if self.path and self.path.startswith(".github/instructions/"):
+            return self.path.rsplit("/", 1)[-1]
+        return old
 
 
 @dataclass
@@ -215,7 +234,7 @@ def _make_entry(key: str, raw: dict) -> Entry:
     templates = raw.get("templates") or raw.get("template")
     if isinstance(templates, str):
         templates = [templates]
-    return Entry(name=name, status=status, url=url, skill=skill, templates=templates)
+    return Entry(name=name, status=status, url=url, skill=skill, templates=templates, path=raw.get("path"))
 
 
 def parse_mapping(data) -> Mapping:
@@ -355,6 +374,21 @@ class Report:
 
 # ------------------------------------------------------------------------------------------ helpers
 
+def kind_for(exists, repo: str) -> str:
+    """exists(relpath) -> bool. Used on a checkout and on survey path lists (--list)."""
+    if any(exists(p) for p in ("technote.json", ".github/instructions/technote-translation.instructions.md",
+                               ".github/skills/release-technote", ".github/templates/README.technote.md")):
+        return "technote"
+    if repo.lower().startswith("hdi_") or any(exists(p) for p in (
+            ".github/instructions/readme.structure.instructions.md", ".github/instructions/readme.hdi.instructions.md")):
+        return "hdi"
+    return "generic"
+
+
+def mentions_usage_rules(text: str) -> bool:
+    return any(re.search(p, text, re.I) for p in USAGE_RULE_PATTERNS)
+
+
 def keep_as_is_sections(agents_md: str) -> str:
     """The '(keep as is)' sections of 4d-template's AGENTS.md, marker removed, comments stripped."""
     text = re.sub(r"<!--.*?-->\n?", "", agents_md, flags=re.S)
@@ -491,7 +525,7 @@ class Migrator:
     def migrate(self, name: str) -> Report:
         owner, repo = (name.split("/", 1) if "/" in name else (self.o.owner, name))
         rep = Report(repo=f"{owner}/{repo}")
-        if repo.lower() in DENYLIST and not self.o.force:
+        if is_denied(repo) and not self.o.force:
             rep.status = "refused"
             rep.warnings.append("repository is on the do-not-touch list (use --force to override)")
             return rep
@@ -537,18 +571,14 @@ class Migrator:
 
     @staticmethod
     def detect_kind(wc: Path, repo: str) -> str:
-        gh = wc / ".github"
-        if ((wc / "technote.json").exists() or (gh / "instructions/technote-translation.instructions.md").exists()
-                or (gh / "skills/release-technote").exists() or (gh / "templates/README.technote.md").exists()):
-            return "technote"
-        if (repo.lower().startswith("hdi_") or (gh / "instructions/readme.structure.instructions.md").exists()
-                or (gh / "instructions/readme.hdi.instructions.md").exists()):
-            return "hdi"
-        return "generic"
+        return kind_for(lambda rel: (wc / rel).exists(), repo)
 
     # --- steps
     def step_instructions(self, wc: Path, kind: str, tpl: Optional[Path], rep: Report) -> None:
         idir = wc / ".github/instructions"
+        if (wc / ".github/.instructions").is_dir():
+            rep.warnings.append(".github/.instructions/: vendored third-party content (not loaded by hosts); "
+                                "left untouched")
         tdir = tpl / ".github/instructions" if tpl else None
         tpl_files = {p.name: p for p in tdir.iterdir()
                      if p.is_file() and p.name.endswith(".instructions.md")
@@ -577,16 +607,43 @@ class Migrator:
                 rep.removed.append(f"{rel} ({'moved to ' + where if entry.status == STATUS_SKILL else 'deleted'})")
                 continue
             if entry and entry.status == STATUS_INSTRUCTION:
-                if entry.templates and tpl and not any(t.lower() == tpl_name.lower() for t in entry.templates):
+                own = bool(tpl) and any(t.lower() == tpl_name.lower() for t in entry.templates or [])
+                new_name = entry.new_name(path.name)
+                if entry.templates and not own and (tpl or new_name != path.name):
+                    # e.g. startup.instructions.md → hdi.startup.instructions.md exists in HDI repos only
                     path.unlink()
-                    rep.removed.append(f"{rel} (repo-specific to {', '.join(entry.templates)} only)")
+                    rep.removed.append(f"{rel} (repo-specific to {', '.join(entry.templates)} only"
+                                       f"{'; generic part: ' + entry.skill + ' skill' if entry.skill else ''})")
+                    continue
+                if own and new_name != path.name:
+                    if new_name in tpl_files:
+                        path.unlink()  # the template's version is added below under the new name
+                        rep.removed.append(f"{rel} (renamed to {new_name} in {tpl_name})")
+                    elif (idir / new_name).exists():
+                        path.unlink()
+                        rep.removed.append(f"{rel} (renamed to {new_name}, already present)")
+                    else:
+                        path.rename(idir / new_name)
+                        rep.added.append(f".github/instructions/{new_name} (renamed from {path.name})")
+                        rep.warnings.append(f"{rel}: renamed to {new_name}, but {tpl_name} does not ship it yet; "
+                                            f"content kept as is")
+                    continue
+                other = self._template_copy(path.name, entry, rep)
+                if other:
+                    src, src_name = other
+                    if path.read_bytes() != src.read_bytes():
+                        path.write_bytes(src.read_bytes())
+                        rep.modified.append(f"{rel} (replaced by the {src_name} version)")
                     continue
                 rep.kept.append(rel)
                 if tpl:
                     rep.warnings.append(f"{rel}: repo-specific but absent from {tpl_name}; kept as is")
-                continue
-            rep.kept.append(rel)
-            rep.warnings.append(f"{rel}: not in MIGRATION.json; kept, review by hand")
+            else:
+                rep.kept.append(rel)
+                rep.warnings.append(f"{rel}: not in MIGRATION.json; kept, review by hand")
+            if mentions_usage_rules(read_text(path)):
+                rep.warnings.append(f"{rel}: still contains Copilot token/model usage rules and no token-free "
+                                    f"template version was found; edit it by hand")
         for name, src in sorted(tpl_files.items()):
             dest = idir / name
             if not dest.exists():
@@ -594,6 +651,22 @@ class Migrator:
                 rep.added.append(f".github/instructions/{name} (from {tpl_name})")
         if idir.is_dir() and not any(idir.iterdir()):
             idir.rmdir()
+
+    def _template_copy(self, name: str, entry: Entry, rep: Report) -> Optional[Tuple[Path, str]]:
+        """The file `name` from a (migrated) template listed in entry.templates, else from any template."""
+        kinds = list(self.o.templates)
+        if entry.templates:
+            wanted = {t.lower() for t in entry.templates}
+            kinds = [k for k in kinds if _strip_git(self.o.templates[k]).split("/")[-1].lower() in wanted]
+        for k in kinds:
+            try:
+                t = self.template(k)
+            except MigrationError as exc:
+                rep.warnings.append(f".github/instructions/{name}: cannot use template '{k}' ({exc.args[0][:80]}…)")
+                continue
+            if t and (t / ".github/instructions" / name).is_file():
+                return t / ".github/instructions" / name, _strip_git(self.o.templates[k]).split("/")[-1]
+        return None
 
     def _check_variant(self, path: Path, rep: Report) -> None:
         data = path.read_bytes()
@@ -769,7 +842,7 @@ class Migrator:
             add += eol
         if text:
             add += eol
-        add += "# Tools provisioned by the skills in .agents (do not ignore the whole tools/ folder)" + eol
+        add += "# Tools provisioned by the 4D skills (see the 4dtools skill)" + eol
         add += "".join(d + eol for d in missing)
         write_text(p, text + add)
         (rep.modified if text else rep.added).append(f".gitignore (+ {' '.join(missing)})")
@@ -923,7 +996,7 @@ def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, Li
     warns: List[str] = []
 
     def resolve(target: str, fname: str, anchor: Optional[str]) -> Tuple[Optional[str], str]:
-        """→ (new target, or None to unlink, or "" to leave as is; description)."""
+        """→ (new target, or None to unlink, or "" to leave as is; description). Labels: see label_for()."""
         if not fname or "{" in fname:
             return "", "placeholder/directory link left as is"
         if (wc / ".github/instructions" / fname).exists():
@@ -933,6 +1006,14 @@ def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, Li
         e = mapping.instructions.get(fname)
         if e and e.url:
             return e.url, f"→ {e.url}"
+        if e and e.status == STATUS_INSTRUCTION:
+            new_name = e.new_name(fname)
+            if new_name != fname and (wc / ".github/instructions" / new_name).exists():
+                prefix = target[:target.index(".github/")]
+                return f"{prefix}.github/instructions/{new_name}{anchor or ''}", "renamed"
+            if e.skill:  # removed from this repository; its generic part lives in a skill
+                url = SKILLS_TREE_URL + e.skill
+                return url, f"→ {url}"
         if e and e.status == STATUS_DELETED:
             return None, "deleted; link removed (text kept)"
         return "", "no mapping; left as is"
@@ -949,6 +1030,11 @@ def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, Li
         if new == target:
             return m.group(0)
         done.append(f"{target} {why}" if why.startswith("→") else f"{target} → {new}")
+        e = mapping.instructions.get(fname)
+        if e and e.skill and new in (e.url, SKILLS_TREE_URL + e.skill):
+            label = f"{e.skill} skill"
+        elif e and why == "renamed" and label.strip("`") == fname:
+            label = label.replace(fname, e.new_name(fname))
         return f"[{label}]({new}{title})"
 
     def refdef(m: re.Match) -> str:
@@ -974,12 +1060,14 @@ def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, Li
     inline_re = re.compile(r"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*(" + _LINK_TARGET + r")(\s+\"[^\"]*\")?\s*\)")
     ref_re = re.compile(r"^(\s{0,3}\[[^\]]+\]:\s*<?)(" + _LINK_TARGET + r")(>?(?:\s+\"[^\"]*\")?\s*\r?\n?)$")
     href_re = re.compile(r"(href=[\"'])(" + _LINK_TARGET + r")([\"'])")
+    dup_re = re.compile(r"(\[[^\[\]]+\]\([^()\s]+\))(?:\s*,\s*\1)+")
     out = []
     for i, line in enumerate(lines):
         if not mask[i] and ".github/" in line:
-            line = inline_re.sub(inline, line)
-            line = ref_re.sub(refdef, line)
-            line = href_re.sub(href, line)
+            new = href_re.sub(href, ref_re.sub(refdef, inline_re.sub(inline, line)))
+            if new != line:  # e.g. css + tahoe.css both became "[4dcss skill](…)": keep one
+                new = dup_re.sub(r"\1", new)
+            line = new
         out.append(line)
     return "".join(out), done, warns
 
@@ -1054,6 +1142,115 @@ def ensure_checkout_submodules(text: str) -> Tuple[str, str]:
     return "".join(lines), "checkout step with submodules added"
 
 
+# --------------------------------------------------------------------------------------- inventory
+
+# Facts the survey cannot show (it only lists agent files), reported in the inventory.
+SURVEY_NOTES = {
+    "4D-Demo-AI-Automation": "`.github/.instructions/` (vendored 4d-depot content, MIT) left untouched",
+    "TechNote_26-01-AIKitInModernApp": "copilot-instructions is AIManager-specific: moved to AGENTS.md verbatim",
+}
+
+
+def _md(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def inventory(survey: Path, mapping: Optional[Mapping], results: Dict[str, dict], templates: Dict[str, str]) -> str:
+    """Markdown table of every surveyed repository: detected kind, planned action, and run results."""
+    forks: Dict[str, bool] = {}
+    for line in (survey / "scan.tsv").read_text("utf-8").splitlines():
+        parts = line.split("\t")
+        if parts and parts[0]:
+            forks[parts[0]] = len(parts) > 1 and parts[1] == "true"
+    files: Dict[str, List[Tuple[str, str]]] = {}
+    for line in (survey / "files.tsv").read_text("utf-8").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            files.setdefault(parts[0], []).append((parts[1], parts[2]))
+            forks.setdefault(parts[0], False)
+    tpl_names = {_strip_git(u).split("/")[-1] for u in templates.values()}
+    tpl_copilot = {sha for repo, rows in files.items() if repo in tpl_names
+                   for path, sha in rows if path == ".github/copilot-instructions.md"}
+
+    def blob_text(sha: str) -> str:
+        b = survey / "blobs" / sha
+        return b.read_bytes().decode("utf-8", "replace") if b.exists() else ""
+
+    rows = []
+    for repo in sorted(forks, key=str.lower):
+        paths = files.get(repo, [])
+        names = {p for p, _ in paths}
+        exists = lambda rel: any(n == rel or n.startswith(rel + "/") for n in names)
+        instr = [(p.split("/")[-1], sha) for p, sha in paths if p.startswith(".github/instructions/")]
+        skills = sorted({p.split("/")[2] for p, _ in paths if p.startswith(".github/skills/")})
+        copilot = next((sha for p, sha in paths if p == ".github/copilot-instructions.md"), None)
+        kind = kind_for(exists, repo)
+        notes: List[str] = []
+        if repo.lower() in CORE_REPOS:
+            action = "core — migrated by its own session"
+        elif is_denied(repo):
+            action = "deferred (do not touch)"
+        elif not (instr or skills or copilot):
+            action = "nothing to migrate"
+        else:
+            action = f"migrate ({kind})"
+            if mapping is None:
+                notes.append("MIGRATION.json not available yet")
+            else:
+                removed = [n for n, _ in instr if n in mapping.instructions
+                           and mapping.instructions[n].status in (STATUS_SKILL, STATUS_DELETED)
+                           and n not in KEEP_OWN.get(kind, set())]
+                kept = [n for n, _ in instr if n not in removed]
+                if removed:
+                    notes.append(f"remove {len(removed)} instruction copies")
+                for n, sha in instr:
+                    if n not in kept:
+                        continue
+                    e = mapping.instructions.get(n)
+                    if n in KEEP_OWN.get(kind, set()):
+                        notes.append(f"keep own `{n}`")
+                    elif e is None:
+                        notes.append(f"`{n}` not in MIGRATION.json (kept)")
+                    elif mentions_usage_rules(blob_text(sha)):
+                        notes.append(f"`{n}` has token rules → template version")
+                    else:
+                        notes.append(f"keep/sync `{n}`")
+            if skills:
+                notes.append("remove skills: " + ", ".join(f"`{x}`" for x in skills))
+            if copilot:
+                if copilot in tpl_copilot:
+                    notes.append("copilot-instructions = template copy → template AGENTS.md")
+                else:
+                    notes.append(f"copilot-instructions {copilot[:7]} custom/modified → AGENTS.md (review)")
+        if repo in SURVEY_NOTES:
+            notes.append(SURVEY_NOTES[repo])
+        if exists(".gitmodules"):
+            notes.append("has other submodules")
+        r = results.get(repo, {})
+        status = r.get("status", "")
+        if r.get("warnings"):
+            status += f" ({len(r['warnings'])} warnings)"
+        rows.append((repo, "yes" if forks.get(repo) else "", kind if action.startswith("migrate") else "",
+                     action, "; ".join(notes), status, r.get("commit", "")))
+
+    counts: Dict[str, int] = {}
+    for row in rows:
+        counts[row[3]] = counts.get(row[3], 0) + 1
+    out = ["# Migration status", "",
+           "Repositories found by the survey of agent files (`scan.tsv` / `files.tsv`), the layout family detected "
+           "by `scripts/migrate-legacy-repo.py`, the planned action and the result of the run.",
+           "Generated with `python3 scripts/migrate-legacy-repo.py --list --survey <dir> [--results report.json]`.",
+           "", "| Action | Repositories |", "|---|--:|"]
+    out += [f"| {a} | {n} |" for a, n in sorted(counts.items())]
+    out += ["", "| Repository | Fork | Kind | Action | Plan / notes | Result | Commit |", "|---|---|---|---|---|---|---|"]
+    order = lambda r: (not r[3].startswith("migrate"), r[3], r[0].lower())
+    for repo, fork, kind, action, notes, status, commit in sorted(rows, key=order):
+        link = f"[{repo}](https://github.com/{DEFAULT_OWNER}/{repo})"
+        c = f"[`{commit}`](https://github.com/{DEFAULT_OWNER}/{repo}/commit/{commit})" if commit else ""
+        out.append(f"| {link} | {fork} | {kind} | {_md(action)} | {_md(notes)} | {_md(status)} | {c} |")
+    return "\n".join(out) + "\n"
+
+
 # ---------------------------------------------------------------------------------------------- CLI
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1067,7 +1264,7 @@ def build_parser() -> argparse.ArgumentParser:
                "  %(prog)s --kind technote ErrorManagement --survey ~/survey --push\n"
                "Without --push, changes are committed in WORKDIR/<repo> only. Re-running on a migrated "
                "repository is a no-op.")
-    ap.add_argument("repos", nargs="+", metavar="REPO", help="repository name (owner defaults to --owner) or owner/name")
+    ap.add_argument("repos", nargs="*", metavar="REPO", help="repository name (owner defaults to --owner) or owner/name")
     ap.add_argument("--kind", choices=["auto", "hdi", "technote", "generic"], default="auto",
                     help="template family (default: auto-detect; generic = no template, keep repo files)")
     ap.add_argument("--dry-run", action="store_true", help="apply in the clone and report; do not commit or push")
@@ -1089,11 +1286,39 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--allow-legacy-template", action="store_true",
                     help="use a template that has not been migrated itself (testing only)")
     ap.add_argument("--no-submodule", action="store_true", help="do not add the .agents submodule (offline tests)")
+    inv = ap.add_argument_group("inventory (no repository is cloned or changed)")
+    inv.add_argument("--list", action="store_true",
+                     help="write a Markdown table of every surveyed repository with kind and planned action "
+                          "(needs --survey)")
+    inv.add_argument("--results", type=Path, action="append", default=[],
+                     help="report JSON(s) from earlier runs (--report-json) to fill the Result/Commit columns")
+    inv.add_argument("--list-output", type=Path, help="write the table to this file instead of stdout")
     return ap
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.list:
+        if not args.survey:
+            parser.error("--list needs --survey")
+        try:
+            mapping = load_mapping(args.migration)
+        except MigrationError:
+            mapping = None
+        results: Dict[str, dict] = {}
+        for f in args.results:
+            for r in json.loads(f.read_text("utf-8")):
+                results[r["repo"].split("/")[-1]] = r  # later files win
+        text = inventory(args.survey, mapping, results, TEMPLATES)
+        if args.list_output:
+            args.list_output.parent.mkdir(parents=True, exist_ok=True)
+            args.list_output.write_text(text, "utf-8")
+        else:
+            sys.stdout.write(text)
+        return 0
+    if not args.repos:
+        parser.error("give at least one REPO (or --list)")
     if args.dry_run and args.push:
         print("--dry-run and --push are exclusive", file=sys.stderr)
         return 2
