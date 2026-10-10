@@ -240,7 +240,8 @@ class MigrateE2E(unittest.TestCase):
         }])
         make_repo(r, "Custom_Demo", [{
             ".github/copilot-instructions.md": "# 4D Project — Global Instructions\n\nRead `.github/.instructions/`.\n"
-                                               "Use skill `.github/skills/4d-docs` and `.github/skills/4d-form-layout`.\n",
+                                               "Use skill `.github/skills/4d-docs` and `.github/skills/4d-form-layout`.\n"
+                                               "\n| Skill | When |\n|---|---|\n| `4d-docs` | docs |\n",
             ".github/.instructions/4d.instructions.md": "external\n",
             ".github/skills/4d-docs/SKILL.md": "docs\n",
             ".github/skills/4d-form-layout/SKILL.md": "layout\n",
@@ -377,6 +378,10 @@ class MigrateE2E(unittest.TestCase):
         self.assertTrue(agents.startswith("# 4D Project — Global Instructions"))
         self.assertIn("`.agents/skills/4dlang`", agents)           # 4d-docs → 4dlang (MIGRATION.json)
         self.assertIn("`.agents/skills/4d-form-layout`", agents)   # unknown → same name
+        self.assertIn("| `4dlang` | docs |", agents)                # bare skill name renamed
+        self.assertNotIn("4d-docs", agents)
+        self.assertIn("skill references renamed in the carried-over content: 4d-docs → 4dlang",
+                      "\n".join(rep["notes"]))
         self.assertIn("## Skills", agents)
         self.assertIn("git submodule update --init .agents", agents)
         self.assertNotIn("(keep as is)", agents)
@@ -514,6 +519,12 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(rows["Empty"][2], "nothing to migrate")
         finally:
             shutil.rmtree(d)
+
+    def test_merge_renamed_rows(self):
+        t = "| Skill | When |\r\n|---|---|\r\n| `4dform` | docs |\r\n| `4dform` | layout |\r\n| `x` | y |\r\n"
+        self.assertEqual(migrate.merge_renamed_rows(t, {"4dform"}),
+                         "| Skill | When |\r\n|---|---|\r\n| `4dform` | docs; layout |\r\n| `x` | y |\r\n")
+        self.assertEqual(migrate.merge_renamed_rows(t, {"other"}), t)
 
     def test_branches_table(self):
         text = ("## Modernisation notes\n\nConverted from the binary.\n\n| Branch | Description | Instructions |\n"

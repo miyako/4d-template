@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 TRAILER = "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
 DEFAULT_OWNER = "miyako"
@@ -409,6 +409,24 @@ def rewrite_technote_refs(text: str, skills: Dict[str, str], bare_names: bool) -
     return text
 
 
+def merge_renamed_rows(text: str, names: Set[str]) -> str:
+    """Merge adjacent 2-column table rows whose first cell became the same renamed skill (`| `x` | a |` and
+    `| `x` | b |` → `| `x` | a; b |`)."""
+    out: List[str] = []
+    row = re.compile(r"^\|\s*`?([\w.-]+)`?\s*\|([^|]*)\|\s*$")
+    for line in text.split("\n"):
+        m = row.match(line.rstrip("\r"))
+        prev = row.match(out[-1].rstrip("\r")) if out else None
+        if m and prev and m.group(1) == prev.group(1) and m.group(1) in names:
+            cr = "\r" if out[-1].endswith("\r") else ""
+            merged = prev.group(2).rstrip() + "; " + m.group(2).strip()
+            head = out[-1][:prev.start(2)]
+            out[-1] = f"{head}{merged} |{cr}"
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def kind_for(exists, repo: str) -> str:
     """exists(relpath) -> bool. Used on a checkout and on survey path lists (--list)."""
     if any(exists(p) for p in ("technote.json", ".github/instructions/technote-translation.instructions.md",
@@ -728,6 +746,7 @@ class Migrator:
                             f"copy saved to {keep} — check it for lessons missing from the skill")
 
     def step_skills(self, wc: Path, rep: Report) -> None:
+        self._moved_skills: Dict[str, str] = {}
         sdir = wc / ".github/skills"
         if not sdir.is_dir():
             return
@@ -739,6 +758,8 @@ class Migrator:
             if e or d.name in KNOWN_MOVED_SKILLS:
                 shutil.rmtree(d)
                 target = (e.skill or e.url) if e else None
+                if e and e.skill:
+                    self._moved_skills[d.name] = e.skill
                 rep.removed.append(f".github/skills/{d.name}/ (moved to {target or 'miyako/skills'})")
                 if not e:
                     rep.warnings.append(f".github/skills/{d.name}: not in MIGRATION.json; removed as a known "
@@ -779,6 +800,7 @@ class Migrator:
         return "custom", None, 0.0
 
     def step_agents(self, wc: Path, repo: str, kind: str, tpl: Optional[Path], rep: Report) -> None:
+        self._carried_renames: List[str] = []
         old_path = wc / ".github/copilot-instructions.md"
         agents = wc / "AGENTS.md"
         old = read_text(old_path) if old_path.exists() else None
@@ -799,7 +821,7 @@ class Migrator:
                 if cls in ("custom", "modified"):
                     body = old if cls == "custom" else self._hunks_text(var.text, old)
                     new = new.rstrip("\n") + "\n\n## Migrated from .github/copilot-instructions.md\n\n" + \
-                        rewrite_paths(body, self.mapping).strip("\n") + "\n"
+                        self._carry(body).strip("\n") + "\n"
                     rep.notes.append(f"copilot-instructions.md ({cls}) appended to the existing AGENTS.md")
                 else:
                     rep.notes.append(f"copilot-instructions.md was {cls} ({var.origin if var else ''}); dropped")
@@ -822,7 +844,7 @@ class Migrator:
                     rep.notes.append(f"copilot-instructions.md was the unmodified template ({var.origin}); "
                                      f"AGENTS.md from {base_origin}")
                 elif cls == "modified":
-                    text = base.rstrip("\n") + "\n\n" + self._hunks_text(var.text, old)
+                    text = base.rstrip("\n") + "\n\n" + self._carry(self._hunks_text(var.text, old))
                     rep.notes.append(f"copilot-instructions.md differed from the template ({var.origin}, "
                                      f"similarity {ratio:.2f}); repository additions kept at the end of AGENTS.md")
                     rep.warnings.append("AGENTS.md: review the 'Repository-specific notes' section and merge it")
@@ -836,7 +858,7 @@ class Migrator:
                     rep.warnings.append(f"copilot-instructions.md dropped as a skill copy; saved to {saved} — "
                                         f"check it for lessons missing from the skill")
                 else:
-                    text = rewrite_paths(old, self.mapping)
+                    text = self._carry(old)
                     if not mentions_skills(text):
                         text = text.rstrip("\n") + "\n\n" + skills_block
                     rep.notes.append("copilot-instructions.md is repository-specific; moved to AGENTS.md "
@@ -852,6 +874,21 @@ class Migrator:
         if old is not None:
             old_path.unlink()
             rep.removed.append(".github/copilot-instructions.md (folded into AGENTS.md)")
+        if self._carried_renames:
+            rep.notes.append("AGENTS.md: skill references renamed in the carried-over content: "
+                             + ", ".join(self._carried_renames))
+
+    def _carry(self, text: str) -> str:
+        """Repository content carried into AGENTS.md: moved instruction paths rewritten, and the names / paths
+        of the skills this repository had under .github/skills renamed to their miyako/skills skill."""
+        text = rewrite_paths(text, self.mapping)
+        moved = {k: v for k, v in getattr(self, "_moved_skills", {}).items() if k != v}
+        if moved:
+            new = merge_renamed_rows(rewrite_technote_refs(text, moved, bare_names=True), set(moved.values()))
+            if new != text:
+                self._carried_renames = sorted(f"{k} → {v}" for k, v in moved.items())
+            text = new
+        return text
 
     def _hunks_text(self, base_old: str, repo_old: str) -> str:
         hunks = added_hunks(base_old, repo_old)
@@ -1305,7 +1342,7 @@ def ensure_checkout_submodules(text: str) -> Tuple[str, str]:
 # Facts the survey cannot show (it only lists agent files), reported in the inventory.
 SURVEY_NOTES = {
     "4D-Demo-AI-Automation": "`.github/.instructions/` (vendored 4d-depot content, MIT) left untouched; "
-                             "HELD: custom AGENTS.md names skills `4d-docs`/`4d-form-layout` (now `4dform`), awaiting decision",
+                             "custom AGENTS.md: skill names `4d-docs`/`4d-form-layout` renamed to `4dform`",
     "TechNote_26-01-AIKitInModernApp": "copilot-instructions is AIManager-specific: moved to AGENTS.md verbatim",
 }
 
