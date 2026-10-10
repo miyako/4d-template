@@ -1,0 +1,39 @@
+# Moves the `.agents` submodule (miyako/skills, branch dist) to the latest commit and pushes the new
+# pointer to the default branch. Runs weekly and on demand. Nothing is committed when skills are unchanged.
+name: Update skills
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"   # Mondays 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-skills
+  cancel-in-progress: false
+
+jobs:
+  update-skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          submodules: true
+
+      - name: Update .agents to the tip of its branch
+        run: git submodule update --init --remote .agents
+
+      - name: Commit and push if the pointer changed
+        run: |
+          if git diff --quiet -- .agents; then
+            echo "Skills are up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .agents
+          git commit -m "Update skills (.agents → miyako/skills@$(git -C .agents rev-parse --short HEAD))"
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"

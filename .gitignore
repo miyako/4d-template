@@ -1,0 +1,28 @@
+# macOS / Windows
+.DS_Store
+ehthumbs.db
+Thumbs.db
+
+# 4D data, logs and user preferences
+[dD][aA][tT][aA]/
+Logs/
+userPreferences.*/
+
+# 4D derived data and caches
+DerivedData/
+
+# 4D components installed by the dependency manager
+Libraries/
+
+# Uncomment to ignore the 4D trash
+# Project/Trash
+
+# Uncomment if user/machine settings must not be shared (decide per repository)
+# Settings/
+
+# Tools provisioned by the skills in .agents (4dtools). Do NOT ignore the whole tools/ folder:
+# some repositories commit their own scripts there.
+/tools/4dcatalog/
+/tools/4dform/
+/tools/4dlsp/
+/tools/4dlang/
