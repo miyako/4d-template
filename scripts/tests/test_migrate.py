@@ -64,6 +64,10 @@ OLD_TN = ("# Copilot instructions: 4D technical note localisation\n\n## Non-nego
 NEW_TN_AGENTS = ("# 4D technical note localisation\n\n## Rules\n\n1. Code is never translated.\n\n## Skills\n\n"
                  "Read `.agents/AGENTS.md`; skills in `.agents/skills/`.\n")
 HDI_AGENTS = "# HDI demo project\n\nA 4D How Do I demo.\n"  # lacks the skills pointer: the tool must add it
+TN_GUIDE_README = ("# Technote template\n\nAssign the issue to Copilot; it follows `.github/copilot-instructions.md`.\n"
+                   "Glossary changes: `.github/skills/apply-glossary/SKILL.md` (skill apply-glossary).\n")
+TN_OWN = ("---\napplyTo: src/**\n---\nmy learnings\n\nWorkflow: `.github/copilot-instructions.md`. Run `review-figures` "
+          "(see .github/skills/review-figures/) on review-figures.png, then apply-glossary.\n")
 OLD_SETUP = """name: Copilot setup steps
 on: workflow_dispatch
 jobs:
@@ -181,8 +185,12 @@ class MigrateE2E(unittest.TestCase):
              ".github/instructions/technote-translation.instructions.md": "---\napplyTo: src/**\n---\npipeline v1\n",
              ".github/instructions/aikit.async.instructions.md": AIKIT,
              ".github/skills/apply-glossary/SKILL.md": "glossary\n",
-             ".github/workflows/copilot-setup-steps.yml": OLD_SETUP, "technote.json": "{}\n"},
+             ".github/workflows/copilot-setup-steps.yml": OLD_SETUP, "technote.json": "{}\n",
+             ".github/ISSUE_TEMPLATE/localisation-request.yml": "name: L\n# follows .github/copilot-instructions.md\n",
+             "README.md": TN_GUIDE_README},
             {".github/copilot-instructions.md": None, ".github/skills": None,
+             ".github/ISSUE_TEMPLATE/localisation-request.yml": "name: L\n# follows AGENTS.md\n",
+             "README.md": "# Technote template\n\nFollow AGENTS.md.\n",
              ".github/instructions/aikit.async.instructions.md": None,
              ".github/instructions/technote-translation.instructions.md": "---\napplyTo: src/**\n---\npipeline v2\n",
              "AGENTS.md": NEW_TN_AGENTS, "CLAUDE.md": "@AGENTS.md\n"},
@@ -214,9 +222,10 @@ class MigrateE2E(unittest.TestCase):
                                 "2. Never patch the PDF.\n3. This document uses Shift-JIS figures; keep them.\n")
         make_repo(r, "TN_Bar", [{
             ".github/copilot-instructions.md": tn_cop,
-            ".github/instructions/technote-translation.instructions.md": "---\napplyTo: src/**\n---\nmy learnings\n",
+            ".github/instructions/technote-translation.instructions.md": TN_OWN,
             ".github/instructions/aikit.async.instructions.md": AIKIT,
             ".github/instructions/startup.instructions.md": "startup\n",
+            ".github/ISSUE_TEMPLATE/localisation-request.yml": "name: L\n# follows .github/copilot-instructions.md\n",
             ".github/skills/apply-glossary/SKILL.md": "glossary\n",
             ".github/skills/review-figures/SKILL.md": "figures\n",
             ".github/workflows/copilot-setup-steps.yml": OLD_SETUP,
@@ -224,6 +233,10 @@ class MigrateE2E(unittest.TestCase):
             "technote.json": "{}\n",
             "README.md": "# Bar\n\nNothing to change here.\n",
             ".gitignore": ".venv/\nbuild/\n",
+        }])
+        make_repo(r, "TN_Guide", [{
+            ".github/copilot-instructions.md": OLD_TN, "technote.json": "{}\n",
+            ".github/skills/apply-glossary/SKILL.md": "glossary\n", "README.md": TN_GUIDE_README,
         }])
         make_repo(r, "Custom_Demo", [{
             ".github/copilot-instructions.md": "# 4D Project — Global Instructions\n\nRead `.github/.instructions/`.\n"
@@ -325,7 +338,13 @@ class MigrateE2E(unittest.TestCase):
         self.assertFalse((wc / ".github/skills").exists())
         self.assertEqual(sorted(p.name for p in (wc / ".github/instructions").iterdir()),
                          ["technote-translation.instructions.md"])
-        self.assertIn("my learnings", (wc / ".github/instructions/technote-translation.instructions.md").read_text())
+        self.assertEqual((wc / ".github/instructions/technote-translation.instructions.md").read_text(),
+                         TN_OWN.replace("`.github/copilot-instructions.md`", "`AGENTS.md`")
+                         .replace("`review-figures`", "`technote-review-figures`")
+                         .replace(".github/skills/review-figures/", ".agents/skills/technote-review-figures/SKILL.md")
+                         .replace("then apply-glossary.", "then technote-apply-glossary."))   # .png untouched
+        self.assertEqual((wc / ".github/ISSUE_TEMPLATE/localisation-request.yml").read_text(),
+                         "name: L\n# follows AGENTS.md\n")
         agents = (wc / "AGENTS.md").read_text()
         self.assertTrue(agents.startswith(NEW_TN_AGENTS.rstrip("\n")))
         self.assertIn("## Repository-specific notes", agents)
@@ -337,6 +356,17 @@ class MigrateE2E(unittest.TestCase):
                                                   "actions/checkout@v4\n        with:\n          submodules: true\n"))
         self.assertEqual((wc / ".github/workflows/check.yml").read_text(), "name: check\n")
         self.assertTrue((wc / ".gitignore").read_text().startswith(".venv/\nbuild/\n\n# Tools"))
+
+    def test_2b_technote_unreleased_readme(self):
+        reps, out = self.run_cli("TN_Guide", extra=["--push"])
+        wc = self.checkout("TN_Guide")
+        self.assertEqual((wc / "README.md").read_text(),
+                         TN_GUIDE_README.replace("`.github/copilot-instructions.md`", "`AGENTS.md`")
+                         .replace(".github/skills/apply-glossary/SKILL.md",
+                                  ".agents/skills/technote-apply-glossary/SKILL.md"))   # bare name: untouched
+        self.assertFalse((wc / ".github/ISSUE_TEMPLATE").exists())   # synced only when present
+        reps, out = self.run_cli("TN_Guide", extra=["--push"])
+        self.assertTrue(reps["TN_Guide"]["status"].startswith("no-op"), reps["TN_Guide"])
 
     def test_3_custom(self):
         reps, out = self.run_cli("Custom_Demo", extra=["--push"])
@@ -413,10 +443,10 @@ class MigrateE2E(unittest.TestCase):
         self.assertEqual(self.head("HDI_Dry"), before)
 
     def test_7_idempotent(self):
-        for name in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork", "Webinar_Gen"):
+        for name in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork", "Webinar_Gen", "TN_Guide"):
             if self.head(name) == sh("git", "--git-dir", str(self.tmp / "work" / name / ".git"), "rev-parse", "HEAD"):
                 self.run_cli(name, extra=["--push"])  # make the test independent of ordering
-        heads = {n: self.head(n) for n in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork", "Webinar_Gen")}
+        heads = {n: self.head(n) for n in ("HDI_Foo", "TN_Bar", "Custom_Demo", "SkillCopy_Fork", "Webinar_Gen", "TN_Guide")}
         reps, out = self.run_cli(*heads, extra=["--push"])
         for name, h in heads.items():
             self.assertTrue(reps[name]["status"].startswith("no-op"), (name, reps[name]))

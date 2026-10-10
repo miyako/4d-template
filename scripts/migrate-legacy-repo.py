@@ -389,6 +389,26 @@ def file_history(repo: Optional[Path], rel: str) -> set:
     return shas
 
 
+def rewrite_technote_refs(text: str, skills: Dict[str, str], bare_names: bool) -> str:
+    """`.github/copilot-instructions.md` → `AGENTS.md`; `.github/skills/<old>[/SKILL.md]` →
+    `.agents/skills/<new>/SKILL.md` (other files in the folder keep their relative path); with bare_names,
+    also `<old>` → `<new>` as a whole word. Nothing else changes; idempotent."""
+    text = re.sub(r"(?<![\w/.-])\.github/copilot-instructions\.md\b", "AGENTS.md", text)
+    if not skills:
+        return text
+    names = "|".join(re.escape(n) for n in sorted(skills, key=len, reverse=True))
+
+    def path(m: re.Match) -> str:
+        rest = m.group(2) or ""
+        if rest in ("", "/", "/SKILL.md"):
+            rest = "/SKILL.md"
+        return f".agents/skills/{skills[m.group(1)]}{rest}"
+    text = re.sub(r"\.github/skills/(" + names + r")(?![\w-])(/[\w./-]*)?", path, text)
+    if bare_names:
+        text = re.sub(r"(?<![\w/.-])(" + names + r")(?![\w-]|\.\w)", lambda m: skills[m.group(1)], text)
+    return text
+
+
 def kind_for(exists, repo: str) -> str:
     """exists(relpath) -> bool. Used on a checkout and on survey path lists (--list)."""
     if any(exists(p) for p in ("technote.json", ".github/instructions/technote-translation.instructions.md",
@@ -565,13 +585,15 @@ class Migrator:
         tpl = self.template(kind) if kind in ("hdi", "technote") else None
 
         self.step_instructions(wc, kind, tpl, rep)
+        if kind == "technote":
+            self.step_technote(wc, kind, tpl, rep)
         self.step_skills(wc, rep)
         self.step_agents(wc, repo, kind, tpl, rep)
         self.step_claude(wc, rep)
         self.step_gitignore(wc, rep)
         self.step_setup_steps(wc, kind, tpl, rep)
         self.step_update_skills(wc, kind, tpl, rep)
-        self.step_readme(wc, rep)
+        self.step_readme(wc, kind, tpl, rep)
         self.step_submodule(wc, rep)
 
         git(wc, "add", "-A")
@@ -914,13 +936,46 @@ class Migrator:
         else:
             rep.warnings.append(f"{rel}: customised (not a version shipped by {origin}); left as is")
 
-    def step_readme(self, wc: Path, rep: Report) -> None:
+    def _technote_skills(self, kind: str) -> Dict[str, str]:
+        """Legacy skill folder name → new skill name, for the skills that belong to the technote template."""
+        tname = self.template_name(kind).lower()
+        return {old: e.skill for old, e in self.mapping.skills.items()
+                if e.skill and (any(t.lower() == tname for t in e.templates or [])
+                                or e.skill.startswith("technote-"))}
+
+    def step_technote(self, wc: Path, kind: str, tpl: Optional[Path], rep: Report) -> None:
+        # The repository's own pipeline notes are kept; only the pointers to moved files are updated.
+        rel = ".github/instructions/technote-translation.instructions.md"
+        p = wc / rel
+        if p.is_file():
+            text = read_text(p)
+            new = rewrite_technote_refs(text, self._technote_skills(kind), bare_names=True)
+            if new != text:
+                write_text(p, new)
+                rep.modified.append(f"{rel} (references to AGENTS.md / technote-* skills updated)")
+        rel = ".github/ISSUE_TEMPLATE/localisation-request.yml"
+        if tpl and (wc / rel).is_file() and (tpl / rel).is_file():
+            if (wc / rel).read_bytes() != (tpl / rel).read_bytes():
+                (wc / rel).write_bytes((tpl / rel).read_bytes())
+                rep.modified.append(f"{rel} (synced with {self.template_name(kind)})")
+
+    def step_readme(self, wc: Path, kind: str, tpl: Optional[Path], rep: Report) -> None:
         candidates = [p for p in wc.iterdir() if p.is_file() and p.name.lower() == "readme.md"]
         if not candidates:
             return
         p = candidates[0]
         text = read_text(p)
-        new, stripped = strip_sections(text)
+        if kind == "technote" and tpl and blob_sha(p.read_bytes()) in file_history(tpl, "README.md"):
+            # still the template's usage guide (the technote has not been released yet)
+            guide = rewrite_technote_refs(text, self._technote_skills(kind), bare_names=False)
+            if guide != text:
+                rep.links.append(f"{p.name}: template usage guide: references to AGENTS.md / technote-* skills updated")
+                text_for_strip = guide
+            else:
+                text_for_strip = text
+        else:
+            text_for_strip = text
+        new, stripped = strip_sections(text_for_strip)
         rep.sections.extend(f"{p.name}: {h}" for h in stripped)
         new, links, warns = rewrite_readme_links(new, self.mapping, wc)
         rep.links.extend(f"{p.name}: {l}" for l in links)
