@@ -78,12 +78,14 @@ jobs:
 TOKEN_BRANCHES = "---\napplyTo: README.md\n---\nbranches\n\n## Copilot Token Usage\n\nAdd a table.\n"
 README_HDI = (
     "# HDI_Foo\r\n\r\nDemo.\r\n\r\n## Modernisation notes\r\n\r\n"
-    "| Branch | Description | Instructions |\r\n|---|---|---|\r\n"
+    "Each branch represents a distinct modernisation effort, guided by a corresponding Copilot instruction file.\r\n\r\n"
+    "| Branch | Description | Instructions |\r\n|--------|-------------|--------------|\r\n"
     "| [`b1`](../../tree/b1) | Dark mode | [css.instructions.md](.github/instructions/css.instructions.md), "
     "[tahoe](./.github/instructions/tahoe.css.instructions.md#top) |\r\n"
     "| [`b2`](../../tree/b2) | Docs | [readme.usage.guidance.instructions.md](.github/instructions/readme.usage.guidance.instructions.md) |\r\n"
     "| [`b3`](../../tree/b3) | Branch table | [readme.branches.instructions.md](.github/instructions/readme.branches.instructions.md) |\r\n"
     "| [`b4`](../../tree/b4) | Old path | [`startup.instructions.md`](.github/copilot/instructions/startup.instructions.md) |\r\n"
+    "| [`b5`](../../tree/b5) | README | [readme.hdi.instructions.md](.github/instructions/readme.hdi.instructions.md) |\r\n"
     "\r\nSee the [instructions folder](.github/instructions/).\r\n\r\n"
     "```markdown\r\n## Copilot Token Usage\r\n[x](.github/instructions/css.instructions.md)\r\n```\r\n\r\n"
     "## Copilot Token Usage\r\n\r\n| Session | Tokens |\r\n|---|--:|\r\n| a | 1 |\r\n\r\n"
@@ -93,11 +95,14 @@ README_HDI = (
 )
 README_HDI_EXPECTED = (
     "# HDI_Foo\r\n\r\nDemo.\r\n\r\n## Modernisation notes\r\n\r\n"
-    "| Branch | Description | Instructions |\r\n|---|---|---|\r\n"
-    f"| [`b1`](../../tree/b1) | Dark mode | [4dcss skill]({SKILLS_TREE}4dcss) |\r\n"
+    "Each branch represents a distinct modernisation effort, guided by a 4D skill or a repository instruction file.\r\n\r\n"
+    "| Branch | Description | Guidance |\r\n|--------|-------------|----------|\r\n"
+    f"| [`b1`](../../tree/b1) | Dark mode | [`4dcss`]({SKILLS_TREE}4dcss) |\r\n"
     "| [`b2`](../../tree/b2) | Docs | readme.usage.guidance.instructions.md |\r\n"
     "| [`b3`](../../tree/b3) | Branch table | [readme.branches.instructions.md](.github/instructions/readme.branches.instructions.md) |\r\n"
-    "| [`b4`](../../tree/b4) | Old path | [`hdi.startup.instructions.md`](.github/instructions/hdi.startup.instructions.md) |\r\n"
+    f"| [`b4`](../../tree/b4) | Old path | [`4dstartup`]({SKILLS_TREE}4dstartup), "
+    "[hdi.startup.instructions.md](.github/instructions/hdi.startup.instructions.md) |\r\n"
+    "| [`b5`](../../tree/b5) | README | [readme.structure.instructions.md](.github/instructions/readme.structure.instructions.md) |\r\n"
     "\r\nSee the [instructions folder](.github/instructions/).\r\n\r\n"
     "```markdown\r\n## Copilot Token Usage\r\n[x](.github/instructions/css.instructions.md)\r\n```\r\n\r\n"
     "## License\r\n\r\nMIT \u00e9\u00e8 \u65e5\u672c\u8a9e\r\n"
@@ -361,8 +366,8 @@ class MigrateE2E(unittest.TestCase):
         self.assertIn("notes.instructions.md: still contains Copilot token/model usage rules",
                       "\n".join(rep["warnings"]))
         self.assertEqual((wc / "README.md").read_text(),
-                         f"# Gen\n\nSee [4dstartup skill]({SKILLS_TREE}4dstartup) and "
-                         f"[4dcss skill]({SKILLS_TREE}4dcss).\n")
+                         f"# Gen\n\nSee [`4dstartup`]({SKILLS_TREE}4dstartup) and "
+                         f"[`4dcss`]({SKILLS_TREE}4dcss).\n")
 
     def test_4_skill_copy(self):
         reps, out = self.run_cli("SkillCopy_Fork", extra=["--push"])
@@ -465,6 +470,16 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(rows["Empty"][2], "nothing to migrate")
         finally:
             shutil.rmtree(d)
+
+    def test_branches_table(self):
+        text = ("## Modernisation notes\n\nConverted from the binary.\n\n| Branch | Description | Instructions |\n"
+                "|--------|-------------|--------------|\n| a | b | c |\n\n```md\n| Branch | Description | Instructions |\n"
+                "```\n\n## Other\n\n| Branch | Description | Instructions |\n")
+        new, done, warns = migrate.normalise_branches_table(text)
+        self.assertEqual(new, text.replace("| Instructions |\n|--------|-------------|--------------|",
+                                           "| Guidance |\n|--------|-------------|----------|", 1))
+        self.assertEqual(warns, ["branches table: intro sentence is not the standard one; kept as is"])
+        self.assertEqual(migrate.normalise_branches_table(new), (new, [], []))   # idempotent
 
     def test_strip_sections_keeps_bytes(self):
         text = "# T\n\n## A\n\nx\n\n## Copilot Token Usage\n\n|a|\n\n### sub\n\ny\n\n## B\n\nz"

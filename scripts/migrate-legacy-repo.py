@@ -60,6 +60,8 @@ KNOWN_MOVED_SKILLS = {
     "apply-glossary", "review-figures", "localise-demo-data", "localise-4d-project", "release-technote",
     "4d-docs", "4d-form-layout",
 }
+# README links to a deleted file that has a repository-local successor (HDI_Template readme.branches rules).
+LINK_REPLACEMENTS = {"readme.hdi.instructions.md": "readme.structure.instructions.md"}
 SKILLS_TREE_URL = "https://github.com/miyako/skills/tree/main/4d-skills/skills/"
 TOOL_DIRS = ["/tools/4dcatalog/", "/tools/4dform/", "/tools/4dlsp/", "/tools/4dlang/", "/tools/4dcli/"]
 # Repositories this tool must not touch (DESIGN.md "Do NOT touch" + core repos). Override with --force.
@@ -505,6 +507,15 @@ class Migrator:
             self._templates[kind] = dest
         return self._templates[kind]
 
+    def template_name(self, kind: str) -> str:
+        """Repository name of the template (for a local --template path: the name of its origin, if any)."""
+        url = self.o.templates.get(kind, "")
+        if url and is_local(url):
+            origin = run(["git", "-C", url, "remote", "get-url", "origin"], check=False)
+            if origin.returncode == 0 and origin.stdout.strip():
+                url = origin.stdout.decode("utf-8", "replace").strip()
+        return _strip_git(url).rstrip("/").split("/")[-1]
+
     @property
     def pool(self) -> VariantPool:
         if self._pool is None:
@@ -545,7 +556,7 @@ class Migrator:
         self.step_agents(wc, repo, kind, tpl, rep)
         self.step_claude(wc, rep)
         self.step_gitignore(wc, rep)
-        self.step_setup_steps(wc, tpl, rep)
+        self.step_setup_steps(wc, kind, tpl, rep)
         self.step_update_skills(wc, rep)
         self.step_readme(wc, rep)
         self.step_submodule(wc, rep)
@@ -583,7 +594,7 @@ class Migrator:
         tpl_files = {p.name: p for p in tdir.iterdir()
                      if p.is_file() and p.name.endswith(".instructions.md")
                      and p.name not in TEMPLATE_ONLY_INSTRUCTIONS} if tdir and tdir.is_dir() else {}
-        tpl_name = Path(self.o.templates.get(kind, "")).name.replace(".git", "")
+        tpl_name = self.template_name(kind)
         present = sorted(p for p in idir.iterdir() if p.is_file()) if idir.is_dir() else []
         for path in present:
             rel = f".github/instructions/{path.name}"
@@ -612,16 +623,18 @@ class Migrator:
                 if entry.templates and not own and (tpl or new_name != path.name):
                     # e.g. startup.instructions.md → hdi.startup.instructions.md exists in HDI repos only
                     path.unlink()
-                    rep.removed.append(f"{rel} (repo-specific to {', '.join(entry.templates)} only"
-                                       f"{'; generic part: ' + entry.skill + ' skill' if entry.skill else ''})")
+                    shipped = f" as {new_name}" if new_name != path.name else ""
+                    rep.removed.append(f"{rel} (only {', '.join(entry.templates)} repositories keep it{shipped}"
+                                       f"{'; generic part: skill ' + entry.skill if entry.skill else ''})")
                     continue
                 if own and new_name != path.name:
                     if new_name in tpl_files:
                         path.unlink()  # the template's version is added below under the new name
-                        rep.removed.append(f"{rel} (renamed to {new_name} in {tpl_name})")
+                        rep.removed.append(f"{rel} (replaced by {new_name} from {tpl_name}"
+                                           f"{'; generic part: skill ' + entry.skill if entry.skill else ''})")
                     elif (idir / new_name).exists():
                         path.unlink()
-                        rep.removed.append(f"{rel} (renamed to {new_name}, already present)")
+                        rep.removed.append(f"{rel} (replaced by the existing {new_name})")
                     else:
                         path.rename(idir / new_name)
                         rep.added.append(f".github/instructions/{new_name} (renamed from {path.name})")
@@ -657,7 +670,7 @@ class Migrator:
         kinds = list(self.o.templates)
         if entry.templates:
             wanted = {t.lower() for t in entry.templates}
-            kinds = [k for k in kinds if _strip_git(self.o.templates[k]).split("/")[-1].lower() in wanted]
+            kinds = [k for k in kinds if self.template_name(k).lower() in wanted]
         for k in kinds:
             try:
                 t = self.template(k)
@@ -665,7 +678,7 @@ class Migrator:
                 rep.warnings.append(f".github/instructions/{name}: cannot use template '{k}' ({exc.args[0][:80]}…)")
                 continue
             if t and (t / ".github/instructions" / name).is_file():
-                return t / ".github/instructions" / name, _strip_git(self.o.templates[k]).split("/")[-1]
+                return t / ".github/instructions" / name, self.template_name(k)
         return None
 
     def _check_variant(self, path: Path, rep: Report) -> None:
@@ -703,7 +716,7 @@ class Migrator:
 
     def _classify_old(self, old: str) -> Tuple[str, Optional[Variant], float]:
         """pristine | modified | skill-copy | custom, with the closest variant."""
-        tpl_names = {f"survey:{_strip_git(u).split('/')[-1]}" for u in self.o.templates.values()}
+        tpl_names = {f"survey:{self.template_name(k)}" for k in self.o.templates}
         # Only variants that come from a template (its history, or the survey of the template repo itself)
         # count as "the template the repository was created from".
         tpl_variants = [v for v in self.pool.by_name("copilot-instructions.md")
@@ -736,7 +749,7 @@ class Migrator:
         old = read_text(old_path) if old_path.exists() else None
         if tpl and (tpl / "AGENTS.md").exists():
             base = read_text(tpl / "AGENTS.md").replace("{{REPO_NAME}}", repo)
-            base_origin = _strip_git(self.o.templates[kind]).split("/")[-1]
+            base_origin = self.template_name(kind)
         else:
             base = (f"# {repo}\n\n<!-- Describe what this repository is and its repository-specific rules here. -->\n\n"
                     + keep_as_is_sections(self.base_agents))
@@ -847,13 +860,13 @@ class Migrator:
         write_text(p, text + add)
         (rep.modified if text else rep.added).append(f".gitignore (+ {' '.join(missing)})")
 
-    def step_setup_steps(self, wc: Path, tpl: Optional[Path], rep: Report) -> None:
+    def step_setup_steps(self, wc: Path, kind: str, tpl: Optional[Path], rep: Report) -> None:
         rel = ".github/workflows/copilot-setup-steps.yml"
         p = wc / rel
         if not p.exists():
             src = tpl / rel if tpl and (tpl / rel).exists() else None
             write_text(p, read_text(src) if src else self.base_setup)
-            rep.added.append(f"{rel} (from {tpl.name if src else '4d-template'})")
+            rep.added.append(f"{rel} (from {self.template_name(kind) if src else '4d-template'})")
             text = read_text(p)
             new, msg = ensure_checkout_submodules(text)
             if new != text:
@@ -886,6 +899,9 @@ class Migrator:
         rep.sections.extend(f"{p.name}: {h}" for h in stripped)
         new, links, warns = rewrite_readme_links(new, self.mapping, wc)
         rep.links.extend(f"{p.name}: {l}" for l in links)
+        rep.warnings.extend(f"{p.name}: {w}" for w in warns)
+        new, done, warns = normalise_branches_table(new)
+        rep.links.extend(f"{p.name}: {d}" for d in done)
         rep.warnings.extend(f"{p.name}: {w}" for w in warns)
         if new != text:
             write_text(p, new)
@@ -989,6 +1005,53 @@ def strip_sections(text: str) -> Tuple[str, List[str]]:
 _LINK_TARGET = r"(?:\./)?\.github/(?:copilot/)?instructions/([^)\s#\"'>]*)(#[^)\s\"'>]*)?"
 
 
+OLD_BRANCHES_INTRO = ("Each branch represents a distinct modernisation effort, guided by a corresponding Copilot "
+                      "instruction file.")
+NEW_BRANCHES_INTRO = ("Each branch represents a distinct modernisation effort, guided by a 4D skill or a repository "
+                      "instruction file.")
+_OLD_HEADER = re.compile(r"^(\|\s*Branch\s*\|\s*Description\s*\|\s*)Instructions(\s*\|\s*)$")
+_OLD_SEPARATOR = "|--------|-------------|--------------|"
+_NEW_SEPARATOR = "|--------|-------------|----------|"
+
+
+def normalise_branches_table(text: str) -> Tuple[str, List[str], List[str]]:
+    """Header `Instructions` → `Guidance` (and the standard intro sentence) in the branches table under
+    `## Modernisation notes` / `## Branches`, as in HDI_Template's readme.branches.instructions.md."""
+    lines = split_lines(text)
+    mask = _fence_mask(lines)
+    done: List[str] = []
+    warns: List[str] = []
+    section = ""
+    for i, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        eol = line[len(body):]
+        if mask[i]:
+            continue
+        h = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", body)
+        if h:
+            section = h.group(1).strip().lower()
+            continue
+        m = _OLD_HEADER.match(body)
+        if not m or section not in ("modernisation notes", "modernization notes", "branches"):
+            continue
+        lines[i] = m.group(1) + "Guidance" + m.group(2) + eol
+        done.append("branches table: header Instructions → Guidance")
+        if i + 1 < len(lines) and lines[i + 1].rstrip("\r\n") == _OLD_SEPARATOR:
+            lines[i + 1] = _NEW_SEPARATOR + lines[i + 1][len(_OLD_SEPARATOR):]
+        j = i - 1   # the paragraph just above the table (skip blank lines)
+        while j >= 0 and not lines[j].strip():
+            j -= 1
+        above = lines[j].rstrip("\r\n") if j >= 0 else ""
+        if above == OLD_BRANCHES_INTRO:
+            lines[j] = NEW_BRANCHES_INTRO + lines[j][len(above):]
+            done.append("branches table: standard intro sentence updated")
+        elif above.startswith("#"):
+            warns.append("branches table: no intro sentence above the table; left as is")
+        elif above != NEW_BRANCHES_INTRO:
+            warns.append("branches table: intro sentence is not the standard one; kept as is")
+    return "".join(lines), done, warns
+
+
 def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, List[str], List[str]]:
     lines = split_lines(text)
     mask = _fence_mask(lines)
@@ -1006,6 +1069,10 @@ def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, Li
         e = mapping.instructions.get(fname)
         if e and e.url:
             return e.url, f"→ {e.url}"
+        repl = LINK_REPLACEMENTS.get(fname)
+        if repl and (wc / ".github/instructions" / repl).exists():
+            prefix = target[:target.index(".github/")]
+            return f"{prefix}.github/instructions/{repl}{anchor or ''}", "renamed"
         if e and e.status == STATUS_INSTRUCTION:
             new_name = e.new_name(fname)
             if new_name != fname and (wc / ".github/instructions" / new_name).exists():
@@ -1032,9 +1099,13 @@ def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, Li
         done.append(f"{target} {why}" if why.startswith("→") else f"{target} → {new}")
         e = mapping.instructions.get(fname)
         if e and e.skill and new in (e.url, SKILLS_TREE_URL + e.skill):
-            label = f"{e.skill} skill"
-        elif e and why == "renamed" and label.strip("`") == fname:
-            label = label.replace(fname, e.new_name(fname))
+            return f"[`{e.skill}`]({new}{title})"
+        if why == "renamed":
+            new_name = new.split("#")[0].rsplit("/", 1)[-1]
+            if label.strip("`") == fname:
+                label = new_name
+            if e and e.skill:  # e.g. startup → skill 4dstartup + hdi.startup.instructions.md
+                return f"[`{e.skill}`]({SKILLS_TREE_URL}{e.skill}), [{label}]({new}{title})"
         return f"[{label}]({new}{title})"
 
     def refdef(m: re.Match) -> str:
@@ -1060,13 +1131,20 @@ def rewrite_readme_links(text: str, mapping: Mapping, wc: Path) -> Tuple[str, Li
     inline_re = re.compile(r"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*(" + _LINK_TARGET + r")(\s+\"[^\"]*\")?\s*\)")
     ref_re = re.compile(r"^(\s{0,3}\[[^\]]+\]:\s*<?)(" + _LINK_TARGET + r")(>?(?:\s+\"[^\"]*\")?\s*\r?\n?)$")
     href_re = re.compile(r"(href=[\"'])(" + _LINK_TARGET + r")([\"'])")
-    dup_re = re.compile(r"(\[[^\[\]]+\]\([^()\s]+\))(?:\s*,\s*\1)+")
+    link = r"\[[^\[\]]+\]\([^()\s]+\)"
+    run_re = re.compile(link + r"(?:\s*,\s*" + link + r")+")
+
+    def dedup(m: re.Match) -> str:   # e.g. css + tahoe.css both became [`4dcss`](…): keep the first
+        items = re.findall(link, m.group(0))
+        if len(set(items)) == len(items):
+            return m.group(0)
+        return ", ".join(dict.fromkeys(items))
     out = []
     for i, line in enumerate(lines):
         if not mask[i] and ".github/" in line:
             new = href_re.sub(href, ref_re.sub(refdef, inline_re.sub(inline, line)))
-            if new != line:  # e.g. css + tahoe.css both became "[4dcss skill](…)": keep one
-                new = dup_re.sub(r"\1", new)
+            if new != line:
+                new = run_re.sub(dedup, new)
             line = new
         out.append(line)
     return "".join(out), done, warns
