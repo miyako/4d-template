@@ -207,6 +207,9 @@ class MigrateE2E(unittest.TestCase):
         make_repo(r, "HDI_Foo", [hdi_files()])
         make_repo(r, "HDI_Dry", [hdi_files()])
         make_repo(r, "HDI_LegacyTpl", [hdi_files()])
+        old_wf = sh("git", "-C", str(BASE), "show", "7b20c04:.github/workflows/update-skills.yml")
+        make_repo(r, "HDI_OldWf", [dict(hdi_files(), **{".github/workflows/update-skills.yml": old_wf + "\n"})])
+        make_repo(r, "HDI_CustomWf", [dict(hdi_files(), **{".github/workflows/update-skills.yml": "name: mine\n"})])
         tn_cop = OLD_TN.replace("2. Never patch the PDF.\n",
                                 "2. Never patch the PDF.\n3. This document uses Shift-JIS figures; keep them.\n")
         make_repo(r, "TN_Bar", [{
@@ -368,6 +371,17 @@ class MigrateE2E(unittest.TestCase):
         self.assertEqual((wc / "README.md").read_text(),
                          f"# Gen\n\nSee [`4dstartup`]({SKILLS_TREE}4dstartup) and "
                          f"[`4dcss`]({SKILLS_TREE}4dcss).\n")
+
+    def test_3c_update_skills_workflow(self):
+        reps, out = self.run_cli("HDI_OldWf", "HDI_CustomWf", extra=["--push"])
+        current = (BASE / ".github/workflows/update-skills.yml").read_text()
+        self.assertIn("updated to the 4d-template version", "\n".join(reps["HDI_OldWf"]["modified"]))
+        self.assertEqual((self.checkout("HDI_OldWf") / ".github/workflows/update-skills.yml").read_text(), current)
+        self.assertIn("update-skills.yml: customised", "\n".join(reps["HDI_CustomWf"]["warnings"]))
+        self.assertEqual((self.checkout("HDI_CustomWf") / ".github/workflows/update-skills.yml").read_text(),
+                         "name: mine\n")
+        reps, out = self.run_cli("HDI_OldWf", extra=["--push"])
+        self.assertTrue(reps["HDI_OldWf"]["status"].startswith("no-op"), reps["HDI_OldWf"])
 
     def test_4_skill_copy(self):
         reps, out = self.run_cli("SkillCopy_Fork", extra=["--push"])

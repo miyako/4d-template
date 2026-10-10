@@ -376,6 +376,19 @@ class Report:
 
 # ------------------------------------------------------------------------------------------ helpers
 
+def file_history(repo: Optional[Path], rel: str) -> set:
+    """Blob shas of every committed version of `rel` in the git repository `repo`."""
+    if not repo or not (repo / ".git").exists():
+        return set()
+    out = run(["git", "-C", str(repo), "log", "--format=", "--raw", "--no-abbrev", "--all", "--", rel], check=False)
+    shas = set()
+    for line in out.stdout.decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[0].startswith(":"):
+            shas.update(p for p in parts[2:4] if not set(p) <= {"0"})
+    return shas
+
+
 def kind_for(exists, repo: str) -> str:
     """exists(relpath) -> bool. Used on a checkout and on survey path lists (--list)."""
     if any(exists(p) for p in ("technote.json", ".github/instructions/technote-translation.instructions.md",
@@ -557,7 +570,7 @@ class Migrator:
         self.step_claude(wc, rep)
         self.step_gitignore(wc, rep)
         self.step_setup_steps(wc, kind, tpl, rep)
-        self.step_update_skills(wc, rep)
+        self.step_update_skills(wc, kind, tpl, rep)
         self.step_readme(wc, rep)
         self.step_submodule(wc, rep)
 
@@ -880,14 +893,26 @@ class Migrator:
             write_text(p, new)
             rep.modified.append(f"{rel} ({msg})")
 
-    def step_update_skills(self, wc: Path, rep: Report) -> None:
+    def step_update_skills(self, wc: Path, kind: str, tpl: Optional[Path], rep: Report) -> None:
         rel = ".github/workflows/update-skills.yml"
         p = wc / rel
+        src, origin = self.base_update, "4d-template"
+        if tpl and (tpl / rel).is_file():
+            src, origin = read_text(tpl / rel), self.template_name(kind)
         if not p.exists():
-            write_text(p, self.base_update)
-            rep.added.append(rel)
-        elif read_text(p) != self.base_update:
-            rep.notes.append(f"{rel} exists and differs from 4d-template; left as is")
+            write_text(p, src)
+            rep.added.append(f"{rel} (from {origin})")
+            return
+        cur = read_text(p)
+        if cur == src:
+            return
+        # Earlier versions shipped by 4d-template or the template are upgraded; anything else is the repo's own.
+        known = file_history(self.o.base, rel) | (file_history(tpl, rel) if tpl else set())
+        if blob_sha(cur.encode("utf-8", "surrogateescape")) in known:
+            write_text(p, src)
+            rep.modified.append(f"{rel} (updated to the {origin} version)")
+        else:
+            rep.warnings.append(f"{rel}: customised (not a version shipped by {origin}); left as is")
 
     def step_readme(self, wc: Path, rep: Report) -> None:
         candidates = [p for p in wc.iterdir() if p.is_file() and p.name.lower() == "readme.md"]
